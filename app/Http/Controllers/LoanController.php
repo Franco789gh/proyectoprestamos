@@ -359,4 +359,44 @@ class LoanController extends Controller
         return redirect()->route('loans.show', $loan)
             ->with('success', "Devolución del préstamo {$loan->loan_code} confirmada y registrada correctamente.");
     }
+
+    /**
+     * Ampliar plazo de devolución (Renovación de préstamo activo)
+     */
+    public function extend(Request $request, Loan $loan)
+    {
+        if ($loan->status !== 'activo') {
+            return redirect()->route('loans.show', $loan)
+                ->with('error', 'Solo se puede ampliar el plazo de préstamos en curso.');
+        }
+
+        $validated = $request->validate([
+            'new_expected_return_date' => 'required|date|after:now',
+            'extension_reason' => 'required|string|max:500',
+        ], [
+            'new_expected_return_date.after' => 'La nueva fecha y hora debe ser posterior al momento actual.',
+            'extension_reason.required' => 'Debe ingresar el motivo de la ampliación.',
+        ]);
+
+        $newDate = Carbon::parse($validated['new_expected_return_date']);
+        $oldDate = $loan->expected_return_date->format('d/m/Y H:i');
+        $extNum = ($loan->extensions_count ?? 0) + 1;
+
+        $note = "\n[Ampliación #{$extNum} - " . Carbon::now()->format('d/m/Y H:i') . " por " . auth()->user()->name . "]: Prorrogado de {$oldDate} a {$newDate->format('d/m/Y H:i')}. Motivo: {$validated['extension_reason']}";
+
+        $loan->update([
+            'expected_return_date' => $newDate,
+            'extensions_count' => $extNum,
+            'loan_notes' => trim(($loan->loan_notes ?? '') . $note),
+        ]);
+
+        AuditLog::logAction(
+            'AMPLIACION_PLAZO',
+            "Se amplió el plazo de devolución del préstamo {$loan->loan_code} hasta el {$newDate->format('d/m/Y H:i')}. Motivo: {$validated['extension_reason']}",
+            $loan
+        );
+
+        return redirect()->route('loans.show', $loan)
+            ->with('success', "Plazo de devolución ampliado con éxito hasta el {$newDate->format('d/m/Y H:i')}.");
+    }
 }

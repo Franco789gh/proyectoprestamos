@@ -18,6 +18,7 @@ class Loan extends Model
         'return_user_id',
         'loan_date',
         'expected_return_date',
+        'extensions_count',
         'actual_return_date',
         'purpose',
         'loan_notes',

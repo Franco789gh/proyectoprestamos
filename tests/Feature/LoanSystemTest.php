@@ -271,4 +271,93 @@ class LoanSystemTest extends TestCase
         $response->assertOk();
         $this->assertEquals('application/pdf', $response->headers->get('Content-Type'));
     }
+
+    /**
+     * Caso 8: Ampliación / Prórroga de Plazo de Préstamo.
+     */
+    public function test_loan_extension_increases_return_date_and_extensions_count(): void
+    {
+        $this->actingAs($this->encargado);
+
+        $loan = Loan::create([
+            'loan_code' => 'PRE-2026-000001',
+            'worker_id' => $this->worker->id,
+            'equipment_id' => $this->equipment->id,
+            'loan_user_id' => $this->encargado->id,
+            'loan_date' => Carbon::now(),
+            'expected_return_date' => Carbon::now()->addHour(),
+            'purpose' => 'Reunión de gerencia',
+            'status' => 'activo',
+        ]);
+
+        $newDate = Carbon::now()->addHours(5)->format('Y-m-d H:i:s');
+
+        $response = $this->post(route('loans.extend', $loan), [
+            'new_expected_return_date' => $newDate,
+            'extension_reason' => 'Se alargó la sesión del concejo',
+        ]);
+
+        $response->assertRedirect(route('loans.show', $loan));
+        $loan->refresh();
+        $this->assertEquals(1, $loan->extensions_count);
+        $this->assertStringContainsString('Se alargó la sesión', $loan->loan_notes);
+    }
+
+    /**
+     * Caso 9: Flujo de Gestión de Mantenimiento de Equipos.
+     */
+    public function test_equipment_maintenance_flow(): void
+    {
+        $this->actingAs($this->encargado);
+
+        // 1. Enviar a mantenimiento
+        $response = $this->post(route('equipment.maintenance.send', $this->equipment), [
+            'reason' => 'Cambio de filtro y limpieza',
+            'provider' => 'Epson Service',
+        ]);
+
+        $response->assertSessionHas('success');
+        $this->equipment->refresh();
+        $this->assertEquals('mantenimiento', $this->equipment->status);
+        $this->assertEquals(1, $this->equipment->maintenances()->count());
+
+        $maintenance = $this->equipment->currentMaintenance;
+        $this->assertNotNull($maintenance);
+
+        // 2. Finalizar mantenimiento y reincorporar a disponible
+        $completeResponse = $this->post(route('equipment.maintenance.complete', [$this->equipment, $maintenance]), [
+            'work_performed' => 'Filtro reemplazado y calibración completada',
+            'physical_condition' => 'bueno',
+        ]);
+
+        $completeResponse->assertSessionHas('success');
+        $this->equipment->refresh();
+        $this->assertEquals('disponible', $this->equipment->status);
+        $this->assertEquals('bueno', $this->equipment->physical_condition);
+    }
+
+    /**
+     * Caso 10: Búsqueda Rápida Global en Topbar.
+     */
+    public function test_global_quick_search_api(): void
+    {
+        $this->actingAs($this->encargado);
+
+        $response = $this->get(route('quick-search', ['q' => 'Epson']));
+        $response->assertOk()
+            ->assertJsonStructure(['loans', 'equipment', 'workers']);
+    }
+
+    /**
+     * Caso 11: Vista de Etiqueta Patrimonial con QR.
+     */
+    public function test_equipment_qr_label_view(): void
+    {
+        $this->actingAs($this->encargado);
+
+        $response = $this->get(route('equipment.label', $this->equipment));
+        $response->assertOk()
+            ->assertSee($this->equipment->code)
+            ->assertSee('SISTEMA DE CONTROL PATRIMONIAL');
+    }
 }

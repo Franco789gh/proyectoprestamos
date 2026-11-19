@@ -38,6 +38,16 @@ class Equipment extends Model
         return $this->hasMany(Loan::class)->orderBy('created_at', 'desc');
     }
 
+    public function maintenances()
+    {
+        return $this->hasMany(EquipmentMaintenance::class)->orderBy('created_at', 'desc');
+    }
+
+    public function currentMaintenance()
+    {
+        return $this->hasOne(EquipmentMaintenance::class)->where('status', 'en_proceso')->latestOfMany();
+    }
+
     public function currentLoan()
     {
         return $this->hasOne(Loan::class)->where('status', 'activo')->latestOfMany();

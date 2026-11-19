@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Accessory;
 use App\Models\AuditLog;
 use App\Models\Equipment;
+use App\Models\EquipmentMaintenance;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
@@ -99,8 +100,9 @@ class EquipmentController extends Controller
     {
         $equipment->load([
             'accessories',
+            'maintenances.user',
             'loans' => function ($q) {
-                $q->with(['worker.office', 'loanUser', 'returnUser', 'incident'])->latest();
+                $q->with(['worker.office', 'loanUser', 'returnUser'])->latest();
             },
         ]);
 
@@ -233,5 +235,87 @@ class EquipmentController extends Controller
         );
 
         return back()->with('success', "Accesorio '{$name}' eliminado.");
+    }
+
+    /**
+     * Enviar equipo a servicio técnico / mantenimiento
+     */
+    public function sendToMaintenance(Request $request, Equipment $equipment)
+    {
+        if ($equipment->status === 'prestado') {
+            return back()->with('error', 'No se puede enviar a mantenimiento un equipo que se encuentra actualmente prestado.');
+        }
+
+        $validated = $request->validate([
+            'reason' => ['required', 'string', 'max:500'],
+            'provider' => ['nullable', 'string', 'max:200'],
+            'notes' => ['nullable', 'string', 'max:500'],
+        ], [
+            'reason.required' => 'Debe ingresar el motivo del mantenimiento o falla detectada.',
+        ]);
+
+        \DB::transaction(function () use ($equipment, $validated) {
+            $equipment->update(['status' => 'mantenimiento']);
+
+            $equipment->maintenances()->create([
+                'user_id' => auth()->id(),
+                'entry_date' => now(),
+                'provider' => $validated['provider'] ?? null,
+                'reason' => $validated['reason'],
+                'notes' => $validated['notes'] ?? null,
+                'status' => 'en_proceso',
+            ]);
+
+            AuditLog::logAction(
+                'ENVIO_MANTENIMIENTO',
+                "Se envió a mantenimiento el equipo {$equipment->code} - {$equipment->name}. Motivo: {$validated['reason']}",
+                $equipment
+            );
+        });
+
+        return back()->with('success', "Equipo {$equipment->code} enviado a mantenimiento correctamente.");
+    }
+
+    /**
+     * Retornar equipo de mantenimiento y dejarlo disponible
+     */
+    public function completeMaintenance(Request $request, Equipment $equipment, EquipmentMaintenance $maintenance)
+    {
+        $validated = $request->validate([
+            'work_performed' => ['nullable', 'string', 'max:500'],
+            'physical_condition' => ['required', 'in:bueno,regular'],
+        ]);
+
+        \DB::transaction(function () use ($equipment, $maintenance, $validated) {
+            $notes = trim(($maintenance->notes ?? '') . ($validated['work_performed'] ? "\nTrabajo realizado: " . $validated['work_performed'] : ''));
+
+            $maintenance->update([
+                'exit_date' => now(),
+                'notes' => $notes,
+                'status' => 'completado',
+            ]);
+
+            $equipment->update([
+                'status' => 'disponible',
+                'physical_condition' => $validated['physical_condition'],
+            ]);
+
+            AuditLog::logAction(
+                'RETORNO_MANTENIMIENTO',
+                "Retorno de mantenimiento del equipo {$equipment->code}. Condición física: {$validated['physical_condition']}.",
+                $equipment
+            );
+        });
+
+        return back()->with('success', "Mantenimiento finalizado con éxito. El equipo {$equipment->code} vuelve a estar DISPONIBLE.");
+    }
+
+    /**
+     * Vista de impresión de etiqueta patrimonial con código QR
+     */
+    public function printLabel(Equipment $equipment)
+    {
+        $equipment->load('accessories');
+        return view('equipment.label', compact('equipment'));
     }
 }
